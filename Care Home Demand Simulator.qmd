@@ -1,0 +1,745 @@
+---
+title: "Projecting Care Home Demand"
+format: 
+    dashboard: 
+      theme: [flatly, su-custom.scss]
+      orientation: columns
+      vertical_layout: fill
+      nav-buttons: 
+      - icon: github
+        href: https://github.com/The-Strategy-Unit/care-home-demand-simulator
+    
+logo: www/logo_black.png
+favicon: www/favicon.png
+
+server: shiny
+---
+
+```{r setup}
+#| context: setup
+
+library(shiny)
+library(reticulate)
+library(janitor)
+library(dplyr)
+library(tidyr)
+library(plotly)
+library(DT)
+library(openxlsx)
+
+# source pop projections and ASDM package
+source("all-65-plus-pops.R")  # needs to be first as it clears environment at end of script
+source_python("asdm/asdm.py")
+
+# load XMILE model
+model_r <-  sdmodel(from_xmile= "stella-models/simple care home model.stmx")
+
+## functions
+# run a simulation and export results to df for charts and download
+run_sim <- function(mod){
+    
+    mod$simulate()
+    res <- mod$export_simulation_result(format='df',
+                                         dt = TRUE, 
+                                         to_csv = FALSE)
+                                        
+    return(res)
+}
+
+```
+
+# Introduction
+
+## Column {width="70%"}
+
+### Purpose of this tool
+
+::: {.card title="Purpose of this tool"}
+Across the UK, the population is both growing and ageing. Older people will make up a greater proportion of the larger population, which could lead to an increase in demand for social care services, including residential or nursing care.
+
+This tool can help inform as to whether a geographical area is likely to have sufficient care home beds to cater for the needs of older people for the next 10 years. Users can run different scenarios to answer ‘what if’ questions, such as ‘what if the average length of stay reduces, as more people are supported for longer in their own home before entering a care home?’. It will also give an indication of the cost of providing that care.
+
+The tool was developed for use at local authority (LA) level, but can be used at any geographical level for which the following data is known:
+
+-   Population projections for those aged 65 and over
+-   Annual admission rate per 10,000 to a care home for people aged 65 and over
+-   Current number of registered care home beds
+-   Number of care home beds that are occupied at the start of the simulation
+-   Cost of providing care per person per week
+
+There is the facility to add or reduce the number of registered care home beds, for example as a result of a change of use or a new facility that has an approved by planning application, or a care home that is due to close at a known point in the future.
+
+The Explainer page gives a brief intro to System Dynamics, and explains the logic underlying the simulation model.
+
+The tool is pre-populated with synthetic data. Go to the Simulator to explore with this data, or go to Setup to use your own.
+
+**Credits:** adapted from a model developed by the Report & Analytics Team at Shropshire Council.
+
+For further information please contact [The Strategy Unit](mailto:strategy.unit@nhs.net?subject=project%20code%201138)
+:::
+
+## Column {width="30%"}
+
+### Data Sources {data-height="650"}
+
+::: {.card title="Data Sources"}
+The Adult Social Care team within each local authority should be able to provide the initial values for the Setup page.
+
+The following sites are additional potential sources of data:
+
+-   Unit cost per week: <a target="_blank" href="https://digital.nhs.uk/data-and-information/publications/statistical/adult-social-care-activity-and-finance-report/2022-23">Adult Social Care Finance Return</a>
+
+-   Bed capacity: CQC - download the latest file from the 'Care directory with filters' section
+
+-   Initial beds used: NHS Capacity Tracker or LG Inform
+
+-   New beds approved: Local Authority Planning Department
+
+-   Annual cost uplift factor: <a target = "_blank" href="https://www.england.nhs.uk/wp-content/uploads/2023/03/23-25NHSPS_Annex-D-Prices-and-cost-adjustments.pdf"> NHS Payment Scheme Annex D</a>
+:::
+
+### Limitations & Assumptions {data-height="300"}
+
+::: {.card title="Limitations & Assumptions"}
+Does not split between different types of care home (residential and nursing) - a more detailed simulation model is being planned that will account for this. The unit costs are applied to **all** occupied beds, regardless of client funding arrangements.
+
+Newly commissioned and decommissioned beds are applied at the start of the (calendar) year in which they are due to come on/offline.
+:::
+
+# Explainer
+
+##  {.tabset}
+
+::: {.card title="Intro to System Dynamics"}
+System Dynamics is an approach to help understand the behaviour of complex and interconnected systems over time.
+
+The structure of the system - the way separate components interact and affect each other - determines the behaviour of the system as a whole.
+
+The system is mapped as a stock-flow model, which, when quantified, indicate how variables change over time. ![Simple stock flow diagram](images/simple%20flow.png){fig-alt="a simple model showing how stocks and flows are connected" width="675"}
+
+A model represents the system using:
+
+-   Stocks: where entities can accumulate or deplete over time. e.g. people on a waiting list, patients on a ward. ![representation of a stock](images/stock.png){fig-alt="a stock is represented by a closed rectangle" fig-align="right" width="65"}
+
+-   Flows: the level of a stock can only be changed with a flow in or a flow out. In a model where people are the entity, the flows would be the rates that people move through the system. ![flow](images/flow.png){fig-alt="a flow is represented by a block arrow" fig-align="right" width="186"}
+
+-   Explanatory and soft factors which influence flows ![Other factors](images/auxiliary.png){fig-alt="other factors are represented by a circle, with an arrow connecting it to the flow that it influences" fig-align="right" width="68"}
+:::
+
+::: {.card title="Generating Demand"}
+Each year, a number of people aged 65 and over are admitted to care homes.
+
+By converting this number to a rate per capita, we can apply this to the projected population for each year between 2024 and 2033.
+
+Assuming this rate stays constant in the future, this gives an indication of the number of people likely to be referred for admission to a care home in any given year.
+
+Another assumption is that there is no seasonal variation, and the referrals are evenly applied throughout the year. ![Modelling demand for a care home place](images/board%201.png){fig-alt="model showing the logic of how demand is generated from the population projections" fig-align="left" width="1226"}
+:::
+
+::: {.card title="Admissions"}
+Once referred, people wait until a place becomes available (in practice, this may happen very quickly).
+
+Once admitted, an average length of stay is applied to the placement. ![Capacity limits when people are placed from the waiting list](images/board%202.png){fig-alt="An addition to the previous image shows how people can only move from the waiting list to placement if there are spare beds" fig-align="left" width="1258"}
+:::
+
+::: {.card title="Finance"}
+The Adult Social Care Finance Return (ASC-FR) reports the cost of providing care per person per week for each local authority, by support setting and primary reason for support, for those aged 65 and over.
+
+A simple (non-weighted) average has been taken of the costs across all support settings and all support reasons (excluding Learning Disability Support).
+
+The model uses figures from the most recent return, 2022-23.
+
+![Annual cost of placements can be determined from ASC-FR unit cost](images/board%204.png){fig-alt="The unit cost per week is applied to the number of placements, to generate the total annual cost" fig-align="left" width="500"}
+
+This 'unit cost' has been scaled to give an approximate monthly cost of all the placements, and from this the annual cost, over a rolling 12-month period, can be derived.
+
+This is currently based on the 2022-23 unit cost, with a 2.9% cost uplift factor applied annually. Note: this cost does **not** account for different funding types. Therefore it is likely to be an over-estimate, as it will include self-funders.
+:::
+
+# Setup
+
+## Intro text column
+
+::: {.card title="How to use this page"}
+The model is pre-populated with synthetic data. To explore the model with this data go to the Simulator page. Otherwise, follow these steps to use your own data.
+
+step 1: select your geography. This will generate the ONS population projections for those aged 65 and over. The projections run from 2024 to 2033. It will also extract the 2022-23 average unit cost for clients aged 65 and over accessing residential or nursing long term support for the selected area, as published in the Adult Social Care Activity and Finance Report 2022-23 (table 54). The figure indicated is a simple average of all the support reasons excluding Learning Disability. It does not account for the number of clients in receipt of each type of support.
+
+Hackney, Tower Hamlets and Hillingdon had missing data in the ASC-FR tables. They have each been assigned the average value for the region (London).
+
+This currently only produces projections for geographies in England, but this may be expanded to other UK nations in due course. For other UK regions, download the demo initial values, amend the Excel file then upload.
+
+step 2: enter initial values.
+
+step 3: (leave blank if not known/not required)
+
+```{r}
+
+hr()
+p("Option here to populate the model with your data, download these values then upload when you return in the future.")
+
+# issue with rendering in quarto, need to wrap in brackets
+(shiny::downloadButton("export_params", "Download initial values"))
+
+
+
+```
+:::
+
+## Geography selector
+
+```{r geog-select}
+#| title: "1: Generate population projections for 65 and over"
+
+selectInput(inputId = "geo_level",
+            label = "Select geography level",
+            choices = c(Choose = 'demo', geog_level$geog),
+            selectize = FALSE)
+        # need to filter geog_name by level choice
+        
+selectInput(inputId = "geo_area",
+           label = "Select area",
+           choices = NULL, selected = "demo")
+
+hr()
+
+    fileInput(inputId = "upload", 
+              label = "Or upload previously saved initial values", 
+              accept = c("xlsx", ".xlsx"))
+
+##  table or plot of population projections
+# plot has started generating error, why?
+# tableOutput("pop_table")
+
+plotlyOutput("pl_pop")
+
+```
+
+## Other parameters
+
+```{r init-values}
+#| title: "2: Enter initial values"
+
+numericInput("init_beds",
+              "Number of registered care home places at start of simulation:",
+              value = 625)
+  
+numericInput("init_placed",
+             "Number of care home beds occupied at start of simulation:",
+              value = 600)
+ 
+numericInput("init_wait",
+              "Number of people waiting for a care home bed at start of simulation:",
+              value = 0)
+
+numericInput("unit_cost",
+           "Cost of care per person per week (£)  (this will autofill when you choose a geography, but you can manually overwrite it):",
+              value = NULL)
+
+
+
+```
+
+## Change Capacity
+
+```{r}
+#| title: "3: Changes to capacity"
+
+p("This section allows for  care home capacity to change at known points in the future. This could be due to e.g. a new care home being built, or beds becoming de-registered. In the model, changes will be applied in the January of each year.")
+p("Double-click on a cell to change its value")
+
+DTOutput("tb_update_cap")
+actionButton("reset_cap", "Reset to zeroes")
+
+
+```
+
+# Simulator
+
+##  {.sidebar .fill width="25%"}
+
+```{r sim-control}
+#| title: "Control Panel"
+
+sliderInput("adm_rate",
+            "Admission rate per 10 000:",
+              min = 0,
+              max = 500,
+              value = 120,
+              step = 5)
+ br()           
+
+sliderInput("los",
+             "Length of Stay (months):",
+              min = 0,
+              max = 60,
+              value = 28,
+              step = 1) 
+hr()
+
+actionButton("reset_sl", "Reset")
+
+hr()
+
+# issue with rendering in quarto, need to wrap in brackets
+(shiny::downloadButton("export_run", "Download run results"))
+
+hr()
+```
+
+## Outputs {width="50%"}
+
+```{r adm-dis-plot}
+#| title: "Monthly referrals & discharges"
+
+plotlyOutput("pl_flows")
+
+```
+
+```{r bed-usage-pl}
+#| title: "Waiting, placed & unused beds"
+
+plotlyOutput("pl_beds")
+```
+
+## Column {width="25%"}
+
+```{r finance-pl}
+#| title: "Annual costs of placements"
+
+plotlyOutput("pl_fin")
+
+```
+
+```{r bed-capac-pl}
+#| title: "Care home beds capacity"
+
+plotlyOutput("pl_capac")
+
+```
+
+# Results Table
+
+##  {.sidebar .fill width="20%"}
+
+```{r}
+
+(shiny::downloadButton("export_run2", "Download run results"))
+
+hr()
+
+```
+
+## Simulation Results
+
+```{r}
+
+tableOutput("run_results")
+
+```
+
+```{r server}
+#| context: server
+
+## input settings to prep data for model ----
+
+## population from geography
+filter_data <- reactive({
+  pop_cost_data |> 
+    filter(geog == input$geo_level,
+           area_name == input$geo_area) |> 
+    dplyr::select(-c(geog, TIME, ave_unit_cost_22_23))
+})
+
+observe({
+  area_vals <- pop_cost_data |>
+    filter(geog == input$geo_level) |>
+    dplyr::select(area_name)
+  
+  updateSelectInput(
+    session = session,
+    inputId = "geo_area",
+    choices = area_vals,
+    selected = head(area_vals, 1)
+    
+  )
+})
+
+filter_pop <- reactive({
+  filter_data() |>
+    pull(pop65plus)
+})
+
+# population from either geography or file upload
+pop <- reactiveValues()
+
+# if geog selected, use geog pop
+observeEvent(input$geo_area, {
+  pop$pop65 <- filter_pop()
+})
+
+# if file uploaded, use pop from file
+pop_up <- reactive({
+  file <- input$upload
+  req(file)
+  
+  read.xlsx(input$upload$datapath,
+            sheet = 1, cols = 5) |> 
+    pull()
+  
+})
+
+observeEvent(input$upload, {
+  pop$pop65 <- pop_up()
+})
+
+
+# update unit cost from ASCFR
+observe({
+  cost_value <- pop_cost_data |> 
+    filter(geog == input$geo_level,
+           area_name == input$geo_area) |> 
+    pull(ave_unit_cost_22_23) |> 
+    first() |> 
+    round(2)
+  
+  updateNumericInput(
+    session = session,
+    inputId = "unit_cost",
+    value = cost_value
+  )
+})
+
+# pull vector of new beds
+new_beds <- reactive({
+  v$data |> 
+    pull(new)
+})
+
+# pull vector of beds to be removed
+remove_beds <- reactive({
+  v$data |> 
+    pull(remove)
+})
+
+
+# reset sliders 
+observeEvent(input$reset_sl, {
+  freezeReactiveValue(input, "adm_rate")
+  updateSliderInput(inputId = "adm_rate", value = 120)
+  freezeReactiveValue(input, "los")
+  updateSliderInput(inputId = "los", value = 28)
+})
+
+
+# upload own setup data ----
+observeEvent(input$upload, {
+  req(input$upload)
+
+  # overwrite initial beds  
+  init_beds_up <- read.xlsx(input$upload$datapath,
+                            sheet = 1, cols = 1)|>
+    pull(1) 
+  
+  freezeReactiveValue(input, "init_beds")
+  
+  updateNumericInput(
+    inputId = "init_beds",
+    value = init_beds_up)
+  
+  # overwrite initial placed
+  init_placed_up <- read.xlsx(input$upload$datapath,
+                              sheet = 1, cols = 2)|>
+    pull(1) 
+  
+  freezeReactiveValue(input, "init_placed")
+  
+  updateNumericInput(
+    inputId = "init_placed",
+    value = init_placed_up)
+  
+  #overwrite initial waiting
+  init_wait_up <- read.xlsx(input$upload$datapath,
+                            sheet = 1, cols = 3)|>
+    pull(1) 
+  
+  freezeReactiveValue(input, "init_wait")
+  
+  updateNumericInput(
+    inputId = "init_wait",
+    value = init_wait_up)
+  
+  # overwrite unit cost
+  unit_cost_up <- read.xlsx(input$upload$datapath,
+                            sheet = 1, cols = 4)|>
+    pull(1) 
+  
+  freezeReactiveValue(input, "unit_cost")
+  
+  updateNumericInput(
+    inputId = "unit_cost",
+    value = unit_cost_up)
+  
+  # overwrite new beds
+  new_beds_up <- read.xlsx(input$upload$datapath,
+                           sheet = 1, cols = 6) |> 
+    pull()
+  
+  freezeReactiveValue(input, "new_beds")
+  
+  v$data$new <- new_beds_up
+  
+  # overwrite beds to be remvoed
+  remove_beds_up <- read.xlsx(input$upload$datapath,
+                              sheet = 1, cols = 7) |> 
+    pull()
+  
+  freezeReactiveValue(input, "remove_beds")
+  
+  v$data$remove <- remove_beds_up
+  
+})
+
+## input table for adding and removing beds by year ----
+
+#  #initialize dataframe
+tb_blank <- reactive({
+  data.frame(year = numeric(0), new = numeric(0), remove = numeric(0)) |>
+    add_row(year = 2024:2033, new = 0, remove = 0)
+})
+
+v <- reactiveValues(tb_blank = NULL,
+                    tb_blank_reset = data.frame(
+                      year = numeric(0), 
+                      new = numeric(0), 
+                      remove = numeric(0)) |>
+                      add_row(year = 2024:2033, new = 0, remove = 0)
+)
+
+observe({
+  v$data <- tb_blank()
+})
+
+# update table if cells are altered
+observeEvent(input$tb_update_cap_cell_edit, {
+  #get values
+  info = input$tb_update_cap_cell_edit
+  
+  i = as.numeric(info$row)
+  j = as.numeric(info$col + 1) # column index offset by 1
+  k = as.numeric(info$value) 
+  
+  # update reactive vals here based on user input     
+  if(is.na(k) || k == "") {
+    k <-  0
+    v$data[i,j] <- k 
+  } else {
+    v$data[i,j] <- k
+  }
+  
+})
+
+  # this resets the values on button press
+  observeEvent(input$reset_cap, {
+    v$data <- v$tb_blank_reset
+  })
+  
+  
+  ####### outputs ----
+  
+  # table just to test if data loading/filtering correctly
+  # but perhaps good idea to keep in before downloading csv
+  
+  output$pop_table <- renderTable({
+    # filter_data()  |> 
+    # mutate(pop65plus = prettyNum(pop65plus, big.mark = " "))
+    pop$pop65
+  })
+  
+  output$tb_update_cap <- renderDT({
+    DT::datatable(v$data, editable = list(target = "cell",
+                                          numeric = 1:2,
+                                          disable = list(columns = 0)
+    ),
+    options = list(dom = "t"),
+    rownames = FALSE)
+  })
+  
+  
+  ## output initial params as xlsx for upload at future date
+  # https://stackoverflow.com/questions/50948024/shiny-downloadhandler-openxlsx-does-not-generate-a-xlsx-file
+  
+  output$export_params <- downloadHandler(
+    filename = function(){
+      paste0(input$geo_area, "_initial_values.xlsx")
+    },
+    
+    content = function(file) {
+      colnames <- c("Initial beds", "Initial beds occupied", "Initial number waiting", "cost of care per week", "65+ population projection", "Beds to be added", "Beds to be removed")
+      wb <- createWorkbook()
+      addWorksheet(wb, "initial values")
+      
+      writeData(wb, sheet = "initial values", matrix(colnames, nrow = 1), startRow = 1, startCol = 1, colNames = FALSE)
+      writeData(wb, sheet = "initial values", input$init_beds,
+                startRow = 2, startCol = 1, colNames = FALSE)
+      writeData(wb, sheet = "initial values", input$init_placed,
+                startRow = 2, startCol = 2, colNames = FALSE)
+      writeData(wb, sheet = "initial values", input$init_wait,
+                startRow = 2, startCol = 3, colNames = FALSE)
+      writeData(wb, sheet = "initial values", input$unit_cost,
+                startRow = 2, startCol = 4, colNames = FALSE)
+      writeData(wb, sheet = "initial values", filter_pop(), 
+                startRow = 2, startCol = 5, colNames = FALSE)
+      writeData(wb, sheet = "initial values", new_beds(), 
+                startRow = 2, startCol = 6, colNames = FALSE)
+      writeData(wb, sheet = "initial values", remove_beds(), 
+                startRow = 2, startCol = 7, colNames = FALSE)
+      
+      saveWorkbook(wb, file, overwrite = TRUE)
+    }
+  )
+
+
+ #### updating, running and reporting the model results ---- 
+  ## runs simulation based on updated variables
+
+  update_model <- reactive({
+    
+    model_r$clear_last_run()
+    model_r$replace_element_equation('Admission_Rate_per_10,000', input$adm_rate)
+    model_r$replace_element_equation('LOS_(Months)', input$los)
+    model_r$replace_element_equation('initial_care_home_places', input$init_beds)
+    model_r$replace_element_equation('Initial_Placements', input$init_placed)
+    model_r$replace_element_equation('initial_waiting', input$init_wait)
+    model_r$replace_element_equation('unit_cost', input$unit_cost)
+    model_r$overwrite_graph_function_points('pop_proj_65plus', new_ypts = pop$pop65)
+    model_r$overwrite_graph_function_points('new_beds_pa', new_ypts = new_beds())
+    model_r$overwrite_graph_function_points('beds_removed_pa', new_ypts = remove_beds())
+    
+    results <- run_sim(model_r) |> 
+      clean_names() |> 
+      left_join(xaxis_text, join_by(time)) 
+    
+    return(results)
+    
+  })
+ 
+### charts of simulation runs ----
+  output$pl_flows <- renderPlotly({
+    update_model() |> 
+      drop_na() |> 
+      plot_ly(x = ~yy_mm) |> 
+      add_lines(y = ~referrals,
+                name = "New referrals per month",
+                line = list(color ="#5881c1")) |>
+      
+      add_lines(y = ~end_of_residential_care, 
+                name = "Finish residential care", 
+                line = list(color= "#ec6555")) |> 
+      layout(
+        hovermode = "x",
+        xaxis = list(title = ""),
+        yaxis = list(title = "Monthly flows in and out",
+                     rangemode = "tozero",
+                     hoverformat = ".1f")
+        # hoverinfo = "text",
+        # text = c(paste0("Month:", yy_mm,
+        #                 "<br>", name, ": ", y))
+      )
+  })
+  
+
+  output$pl_beds <- renderPlotly({
+    update_model() |> 
+      drop_na() |> 
+      plot_ly(x = ~yy_mm, y = ~placement, name = "Placements", 
+              type="scatter", mode="lines", 
+              line = list(color ="#5881c1"),
+              stackgroup = 'one', fillcolor = "#d4dff0") |> 
+      add_trace(y = ~unused_beds, name = "Unused beds", 
+                line = list(color= "#686f73"),
+                fillcolor= "#d8dadb") |> 
+      add_trace(y =~bed_deficit, name = "Waiting for placement", 
+                line = list(color= "#ec6555"),
+                fillcolor= "#fbd7d3") |> 
+      layout(
+        hovermode = "x",
+        xaxis = list(title = ""),
+        yaxis = list(title = "Occupancy status",
+                     rangemode = "tozero",
+                     hoverformat = ".0f")
+      )
+  })
+  
+  
+  output$pl_fin <- renderPlotly({
+    update_model() |> 
+      drop_na() |> 
+      plot_ly(x = ~yy_mm) |> 
+      add_lines(y = ~placements_cost_pa, 
+                name = "Annual cost of Placements", 
+                line = list(color ="#5881c1")) |> 
+      layout(
+        xaxis = list(title = ""),
+        yaxis = list(title = "Rolling 12 month cost (£)",
+                     rangemode = "tozero",
+                     hoverformat = ".2s")
+      )
+  })
+  
+  
+  output$pl_capac <- renderPlotly({
+    update_model() |> 
+      drop_na() |>
+      plot_ly(x = ~yy_mm) |> 
+      add_lines(y = ~total_care_home_capacity, 
+                name = "Capacity of Care Home Places", 
+                line = list(color ="#686f73")) |> 
+      layout(
+        xaxis = list(title = ""),
+        yaxis = list(title = "Care home capacity",
+                     rangemode = "tozero"))
+  })
+  
+  ###  -- remove when total capacity is updating in model run ----
+  # the plot is just to check if the table is being updated
+  
+  #render plot
+  output$pl_pop <- renderPlotly({
+          update_model() |>
+              drop_na() |>
+              plot_ly(x = ~ yy_mm) |>
+              add_lines(y = ~ pop_proj_65plus,
+                        name = "Population projections",
+                        line = list(color ="#686f73")) |>
+              layout(
+                xaxis = list(title = ""),
+                yaxis = list(title = "Population projections for 65 and over",
+                             rangemode = "tozero")
+              )
+      })
+  
+  # raw table of run results
+  output$run_results <- renderTable({
+    update_model() |>
+      # only each interval, not every DT
+      filter(time %% 1 == 0)
+  })
+  
+  # download run results to xlsx
+ export_params <- downloadHandler(
+    filename = function(){
+      paste0(input$geo_area, "_care_home_projections_run.xlsx")
+    },
+    content = function(file) {
+      write.xlsx(update_model() |> 
+                   filter(time %% 1 == 0) |> 
+                   select(-dt),
+                 rowNames = FALSE, file)
+    }
+  )
+  
+    output$export_run <- export_params
+    output$export_run2 <- export_params
+  
+```
