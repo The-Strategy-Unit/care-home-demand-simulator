@@ -73,7 +73,11 @@ The Explainer page gives a brief intro to System Dynamics, and explains the logi
 
 The tool is pre-populated with synthetic data. Go to the Simulator to explore with this data, or go to Setup to use your own.
 
-**Credits:** adapted from a model developed by the Report & Analytics Team at Shropshire Council.
+**Credits:**
+
+-   The structure is adapted from a model developed by the Report & Analytics Team at Shropshire Council
+
+-   [ASDM](https://github.com/wzh1895/ASDM) is the simulation engine running and updating the model
 
 For further information please contact [The Strategy Unit](mailto:strategy.unit@nhs.net?subject=project%20code%201138)
 :::
