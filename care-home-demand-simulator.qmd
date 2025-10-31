@@ -27,6 +27,11 @@ library(plotly)
 library(DT)
 library(openxlsx)
 
+# Only use local venv if it exists (local dev)
+if (dir.exists(".venv")) {
+  use_virtualenv(".venv", required = FALSE)
+}
+
 # source pop projections and ASDM package
 source("all-65-plus-pops.R")  # needs to be first as it clears environment at end of script
 source_python("asdm/asdm.py")
